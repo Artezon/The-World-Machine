@@ -5,16 +5,17 @@ import logging
 import math
 import os
 import threading
-import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import numpy as np
+import torch
 import uvicorn
-import webrtcvad
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from faster_whisper import WhisperModel
 from protocol import (
     AudioPacketError,
@@ -22,34 +23,25 @@ from protocol import (
     require_positive_int,
 )
 from scipy.signal import resample_poly
+from silero_vad import VADIterator, load_silero_vad
 from uvicorn.config import LOGGING_CONFIG
 
 LOGGER = logging.getLogger("app")
 SERVER_SAMPLE_RATE = 16000
-MIN_REC_SECS = 0.3
 MAX_REC_SECS = 30.0
+BLOCK_SIZE = 512
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-FRONTEND_HTML = BASE_DIR / "frontend" / "index.html"
-DOTENV_PATH = BASE_DIR / ".env"
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+FRONTEND_HTML = FRONTEND_DIR / "index.html"
+ASSETS_DIR = FRONTEND_DIR / "assets"
 
-
-def load_env():
-    if DOTENV_PATH.exists():
-        for line in DOTENV_PATH.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, val = line.partition("=")
-            os.environ.setdefault(key.strip(), val.strip().strip("\"'"))
-
-
-load_env()
+load_dotenv()
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8765"))
 MODEL = os.getenv("MODEL", "small")
 DEVICE = os.getenv("DEVICE", "cuda")
-SILENCE_SECS = int(os.getenv("SILENCE_MS", "500")) / 1000.0
+SILENCE_MS = int(os.getenv("SILENCE_MS", "500"))
+VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.5"))
 
 
 def resample_int16(samples, src_rate, dst_rate):
@@ -67,27 +59,6 @@ def resample_int16(samples, src_rate, dst_rate):
         dst_p = np.linspace(0, 1, target, False)
         resampled = np.interp(dst_p, src_p, samples.astype(np.float32))
     return np.clip(np.rint(resampled), -32768, 32767).astype(np.int16)
-
-
-class VAD:
-    def __init__(self):
-        self._vad = webrtcvad.Vad(1)
-
-    def is_speech(self, samples_int16):
-        if samples_int16 is None or samples_int16.size < 160:
-            return False
-        frame = 320
-        usable = samples_int16.size - (samples_int16.size % frame)
-        speech = 0
-        checked = 0
-        for start in range(0, usable, frame):
-            checked += 1
-            if self._vad.is_speech(
-                samples_int16[start : start + frame].tobytes(),
-                SERVER_SAMPLE_RATE,
-            ):
-                speech += 1
-        return checked > 0 and speech / checked >= 0.25
 
 
 class ConnMgr:
@@ -120,47 +91,66 @@ class ConnMgr:
             return False
 
 
-# Session (VAD + audio buffering)
 class Session:
+    _vad_model = None
+
     def __init__(self, sess_id, lang=""):
         self.sess_id = sess_id
         self.lang = lang
-        self.vad = VAD()
+        if Session._vad_model is None:
+            Session._vad_model = load_silero_vad()
+        self._vad = VADIterator(
+            Session._vad_model,
+            threshold=VAD_THRESHOLD,
+            sampling_rate=SERVER_SAMPLE_RATE,
+            min_silence_duration_ms=int(SILENCE_MS),
+        )
         self._lock = threading.Lock()
         self._buf = []
         self._buf_n = 0
-        self._rec = False
-        self._last_speech = 0.0
+        self._speaking = False
+        self._ring = []
 
     def feed(self, samples_int16):
-        now = time.monotonic()
-        speech = self.vad.is_speech(samples_int16)
-        with self._lock:
-            if not self._rec:
-                if not speech:
-                    return None
-                self._rec = True
-                self._last_speech = now
-                self._buf = [samples_int16.copy()]
-                self._buf_n = samples_int16.size
-                return None
-            self._buf.append(samples_int16.copy())
-            self._buf_n += samples_int16.size
-            if speech:
-                self._last_speech = now
-            total = self._buf_n / SERVER_SAMPLE_RATE
-            silence = now - self._last_speech
-            if total >= MIN_REC_SECS and silence >= SILENCE_SECS:
-                return self._finish()
-            if total >= MAX_REC_SECS:
-                return self._finish()
+        self._ring.append(samples_int16.copy())
+        combined = np.concatenate(self._ring) if len(self._ring) > 1 else self._ring[0]
+        total = len(combined)
+
+        while total >= BLOCK_SIZE:
+            chunk = combined[:BLOCK_SIZE]
+            remaining = combined[BLOCK_SIZE:]
+            self._ring = [remaining] if len(remaining) > 0 else []
+            combined = remaining
+            total = len(remaining)
+
+            tensor = torch.from_numpy(chunk).float() / 32768.0
+            vad_result = self._vad(tensor)
+
+            if vad_result and "start" in vad_result:
+                with self._lock:
+                    self._speaking = True
+                    self._buf = [chunk.copy()]
+                    self._buf_n = chunk.size
+            elif vad_result and "end" in vad_result:
+                with self._lock:
+                    if self._speaking:
+                        self._buf.append(chunk.copy())
+                        self._buf_n += chunk.size
+                        self._speaking = False
+                        return self._finish()
+            elif self._speaking:
+                with self._lock:
+                    self._buf.append(chunk.copy())
+                    self._buf_n += chunk.size
+                    if self._buf_n / SERVER_SAMPLE_RATE >= MAX_REC_SECS:
+                        self._speaking = False
+                        return self._finish()
         return None
 
     def _finish(self):
         audio = np.concatenate(self._buf).astype(np.float32) / 32768
         self._buf = []
         self._buf_n = 0
-        self._rec = False
         return audio
 
 
@@ -222,6 +212,8 @@ def create_app():
 
     app = FastAPI(title="World Machine", version="1.0.0", lifespan=lifespan)
 
+    app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+
     @app.get("/")
     async def index():
         return HTMLResponse(FRONTEND_HTML.read_text("utf-8"))
@@ -247,9 +239,6 @@ def create_app():
                             sess_id,
                             {
                                 "type": "ready" if ready.is_set() else "status",
-                                "text": "Ready"
-                                if ready.is_set()
-                                else "Model loading...",
                             },
                         )
                 elif "bytes" in msg and msg["bytes"]:

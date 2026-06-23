@@ -1,0 +1,214 @@
+:root {
+    --bg: #0d0f12;
+    --surface: #15181d;
+    --border: #262b33;
+    --text: #e8eaed;
+    --muted: #8a929e;
+    --accent: #4fc3f7;
+    --recording: #ef5350;
+    --final: #66bb6a;
+    --radius: 10px;
+    --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+.app {
+    width: 100%;
+    max-width: 800px;
+    height: 100vh;
+    max-height: 900px;
+    display: flex;
+    flex-direction: column;
+    padding: 24px;
+    gap: 20px;
+}
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+}
+header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+}
+.status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--muted);
+}
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+}
+.status-dot.connected {
+    background: var(--final);
+    box-shadow: 0 0 6px rgba(102, 187, 106, 0.4);
+}
+.status-dot.recording {
+    background: var(--recording);
+    box-shadow: 0 0 6px rgba(239, 83, 80, 0.4);
+}
+.controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.mic-btn {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+.mic-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+.mic-btn.active {
+    background: var(--recording);
+    border-color: var(--recording);
+    color: #fff;
+    box-shadow: 0 0 20px rgba(239, 83, 80, 0.3);
+}
+.mic-btn svg {
+    width: 28px;
+    height: 28px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.lang-select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 10px 14px;
+    font-size: 14px;
+    cursor: pointer;
+    outline: none;
+}
+.lang-select:focus {
+    border-color: var(--accent);
+}
+.clear-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--muted);
+    padding: 10px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+.clear-btn:hover {
+    color: var(--text);
+    border-color: var(--accent);
+}
+.meter {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--border);
+    overflow: hidden;
+}
+.meter-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 3px;
+    transition: width 60ms linear;
+    background: var(--final);
+}
+.transcript-area {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+}
+.transcript-area:empty::after {
+    content: "Transcript will appear here";
+    color: var(--muted);
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+}
+.entry {
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    border-left: 3px solid var(--border);
+    background: rgba(255, 255, 255, 0.02);
+    line-height: 1.5;
+    font-size: 16px;
+}
+.entry.realtime {
+    border-left-color: var(--accent);
+}
+.entry.final {
+    border-left-color: var(--final);
+}
+.entry .label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+.entry.realtime .label {
+    color: var(--accent);
+}
+.entry.final .label {
+    color: var(--final);
+}
+.entry .text {
+    word-break: break-word;
+}
+.realtime-text {
+    color: var(--accent);
+    font-style: italic;
+    min-height: 24px;
+    padding: 8px 16px;
+    border-radius: var(--radius);
+    background: rgba(79, 195, 247, 0.06);
+    border-left: 3px solid var(--accent);
+    font-size: 16px;
+    line-height: 1.5;
+}
+.realtime-text:empty {
+    display: none;
+}
