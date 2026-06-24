@@ -22,8 +22,6 @@ let processor = null;
 let source = null;
 let isRecording = false;
 let isWaiting = false;
-let audioQueue = [];
-let flushInterval = null;
 let manualDisconnect = false;
 let hasInputText = false;
 let currentLevel = 0;
@@ -377,30 +375,6 @@ function floatTo16BitPCM(samples) {
   return pcm;
 }
 
-function flushAudioQueue() {
-  if (
-    !audioQueue.length ||
-    !ws ||
-    ws.readyState !== WebSocket.OPEN ||
-    !isRecording
-  )
-    return;
-  const totalLen = audioQueue.reduce((sum, arr) => sum + arr.length, 0);
-  const merged = new Float32Array(totalLen);
-  let offset = 0;
-  for (const arr of audioQueue) {
-    merged.set(arr, offset);
-    offset += arr.length;
-  }
-  audioQueue = [];
-  const pcm = floatTo16BitPCM(merged);
-  const packet = encodePacket(
-    { sampleRate: audioContext ? audioContext.sampleRate : 16000 },
-    pcm.buffer,
-  );
-  ws.send(packet);
-}
-
 async function startRecording() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   try {
@@ -413,11 +387,18 @@ async function startRecording() {
     });
     await initAudio();
     source = audioContext.createMediaStreamSource(stream);
-    const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+    const scriptNode = audioContext.createScriptProcessor(2048, 1, 1);
     scriptNode.onaudioprocess = (e) => {
       if (!isRecording) return;
       const samples = e.inputBuffer.getChannelData(0);
-      audioQueue.push(new Float32Array(samples));
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        const pcm = floatTo16BitPCM(samples);
+        const packet = encodePacket(
+          { sampleRate: audioContext ? audioContext.sampleRate : 16000 },
+          pcm.buffer,
+        );
+        ws.send(packet);
+      }
       let sum = 0;
       for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
       currentLevel = Math.sqrt(sum / samples.length);
@@ -427,7 +408,6 @@ async function startRecording() {
     processor = scriptNode;
     isRecording = true;
     setStatus("recording", "Listening...");
-    flushInterval = setInterval(flushAudioQueue, 100);
     updateActionButton();
     updateInputState();
     requestAnimationFrame(updateMicFill);
@@ -456,11 +436,6 @@ function updateMicFill() {
 
 function stopRecording() {
   isRecording = false;
-  if (flushInterval) {
-    clearInterval(flushInterval);
-    flushInterval = null;
-  }
-  flushAudioQueue();
   if (processor) {
     processor.disconnect();
     processor = null;
@@ -473,7 +448,6 @@ function stopRecording() {
     stream.getTracks().forEach((t) => t.stop());
     stream = null;
   }
-  audioQueue = [];
   updateActionButton();
   if (ws && ws.readyState === WebSocket.OPEN) {
     setStatus("connected", "Connected");
