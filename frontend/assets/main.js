@@ -27,6 +27,44 @@ let flushInterval = null;
 let manualDisconnect = false;
 let hasInputText = false;
 let currentLevel = 0;
+let currentEmotion = "neutral1";
+
+const EMOTION_VARIANTS = {
+  neutral: 5,
+  smirk: 1,
+  concern: 1,
+  crying: 1,
+  distressed: 2,
+  distressed_meow: 1,
+  distressed_talk: 1,
+  eyeclosed: 2,
+  masked: 1,
+  confused: 3,
+  slightly_sad: 1,
+  excited: 1,
+  sad: 1,
+  shocked: 1,
+  smiling: 1,
+  speaking: 1,
+  surprised: 1,
+  upset: 2,
+  upset_meow: 1,
+  wtf: 2,
+  yawning: 1,
+};
+
+async function preloadFaces() {
+  const base = "assets/faces/";
+  const promises = [];
+  for (const [emotion, count] of Object.entries(EMOTION_VARIANTS)) {
+    for (let i = 1; i <= count; i++) {
+      const img = new Image();
+      img.src = base + emotion + i + ".png";
+      promises.push(new Promise((r) => (img.onload = img.onerror = r)));
+    }
+  }
+  await Promise.all(promises);
+}
 
 const CHAR_INTERVAL_MS = 10;
 const SOUND_INTERVAL_MS = 80;
@@ -35,6 +73,18 @@ let typewriterTimer = null;
 let allTokensReceived = false;
 let lastSoundTime = 0;
 let thinkingTimeout = null;
+let emotionBuffer = "";
+let expectEmotion = true;
+
+function setFace(emotion) {
+  const count = EMOTION_VARIANTS[emotion];
+  if (!count) return;
+  const idx = Math.floor(Math.random() * count) + 1;
+  const filename = emotion + idx + ".png";
+  currentEmotion = filename;
+  const faceEl = document.querySelector(".face");
+  if (faceEl) faceEl.src = "assets/faces/" + filename;
+}
 
 function setStatus(state, text) {
   ui.statusDot.className = "status-dot" + (state ? " " + state : "");
@@ -90,6 +140,8 @@ function clearAssistantText() {
   ui.assistantText.textContent = "";
   charQueue = [];
   allTokensReceived = false;
+  emotionBuffer = "";
+  expectEmotion = true;
   if (typewriterTimer) {
     clearInterval(typewriterTimer);
     typewriterTimer = null;
@@ -172,8 +224,9 @@ function connect() {
         case "ready":
           setConnected(true);
           setTimeout(() => {
+            setFace("neutral");
             const welcome =
-              "[You have established a connection with The World Machine.\nState your purpose.";
+              "[You have established a connection with The\xa0World\xa0Machine. State your purpose.";
             clearUserText();
             clearAssistantText();
             allTokensReceived = true;
@@ -195,6 +248,8 @@ function connect() {
           if (!allTokensReceived) {
             if (ui.assistantText.textContent === "") {
               ui.assistantText.textContent = "[";
+              expectEmotion = true;
+              emotionBuffer = "";
             }
             queueChars(msg.text);
           }
@@ -206,6 +261,7 @@ function connect() {
         case "error":
           clearAssistantText();
           allTokensReceived = true;
+          setFace("wtf");
           queueChars(
             "[TRANSMISSION FAILURE. " +
               (msg.message || "UNKNOWN ERROR").toUpperCase() +
@@ -231,7 +287,7 @@ async function sendChat(text) {
   await initAudio();
   if (!text.trim() || !ws || ws.readyState !== WebSocket.OPEN || isWaiting)
     return;
-  ui.userText.textContent = text.trim();
+  ui.userText.textContent = "You: " + text.trim();
   clearAssistantText();
   ui.textInput.value = "";
   updateActionButton();
@@ -240,9 +296,25 @@ async function sendChat(text) {
 }
 
 function queueChars(text) {
-  for (const ch of text) {
-    charQueue.push(ch);
+  if (expectEmotion) {
+    if (text[0] === "{" || emotionBuffer.length > 0) {
+      emotionBuffer += text;
+      const closeIdx = emotionBuffer.indexOf("}");
+      if (closeIdx !== -1) {
+        setFace(emotionBuffer.substring(1, closeIdx));
+        expectEmotion = false;
+        for (let i = closeIdx + 1; i < emotionBuffer.length; i++)
+          charQueue.push(emotionBuffer[i]);
+        if (!typewriterTimer) startTypewriter();
+        emotionBuffer = "";
+      }
+      return;
+    } else {
+      expectEmotion = false;
+      setFace("neutral");
+    }
   }
+  for (const ch of text) charQueue.push(ch);
   if (!typewriterTimer) startTypewriter();
 }
 
@@ -361,6 +433,7 @@ async function startRecording() {
     clearUserText();
     clearAssistantText();
     allTokensReceived = true;
+    setFace("eyeclosed");
     queueChars(
       "[I cannot hear you. The microphone permission may not be granted. Please try again.",
     );
@@ -434,5 +507,6 @@ ui.textInput.addEventListener("keydown", async (e) => {
   }
 });
 
+preloadFaces();
 updateActionButton();
 connect();

@@ -334,7 +334,7 @@ def create_app():
                                 history.append(
                                     {"role": "assistant", "content": full_response}
                                 )
-                                if len(history) > 42:
+                                if len(history) > 50:
                                     history[:2] = []
                                 chat_histories[sess_id] = history
                                 await mgr.send(sess_id, {"type": "done"})
