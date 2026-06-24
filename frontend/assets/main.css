@@ -6,13 +6,17 @@
 }
 
 :root {
+    --white: #fff;
     --bg: #000;
     --accent: #8960bf;
     --border: #312040;
     --box-bg: rgba(19, 11, 24, 0.9);
     --text: #e8eaed;
     --muted: #6a7280;
+    --processing: #ffd54f;
     --recording: #ef5350;
+    --recording-bg: rgba(239, 83, 80, 0.2);
+    --recording-shadow: rgba(239, 83, 80, 0.3);
 }
 
 * {
@@ -179,10 +183,10 @@ body {
 }
 
 .action-btn.recording {
-    background: rgba(239, 83, 80, 0.2);
+    background: var(--recording-bg);
     border-color: var(--recording);
-    color: #fff;
-    box-shadow: 0 0 16px rgba(239, 83, 80, 0.3);
+    color: var(--white);
+    box-shadow: 0 0 16px var(--recording-shadow);
 }
 
 .mic-fill {
@@ -232,12 +236,10 @@ body {
 
 .status-dot.recording {
     background: var(--recording);
-    box-shadow: 0 0 6px rgba(239, 83, 80, 0.4);
 }
 
 .status-dot.processing {
-    background: #ffd54f;
-    box-shadow: 0 0 6px rgba(255, 213, 79, 0.4);
+    background: var(--processing);
     animation: pulse 0.8s ease-in-out infinite;
 }
 
