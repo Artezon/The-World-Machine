@@ -43,11 +43,17 @@ WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cuda")
 SILENCE_MS = int(os.getenv("SILENCE_MS", "500"))
 VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.5"))
+USE_OPENROUTER = os.getenv("USE_OPENROUTER", "1") == "1"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
+LMSTUDIO_HOST = os.getenv("LMSTUDIO_HOST", "localhost")
+LMSTUDIO_PORT = int(os.getenv("LMSTUDIO_PORT", "1234"))
+LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "")
 
 SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "system_prompt.txt"
 SYSTEM_PROMPT = SYSTEM_PROMPT_PATH.read_text("utf-8").strip()
+
+LMSTUDIO_RESPONSE_IDS = {}
 
 
 def resample_int16(samples, src_rate, dst_rate):
@@ -178,7 +184,7 @@ def process_packet(packet, max_bytes=524288):
     return resample_int16(s, sr, SERVER_SAMPLE_RATE)
 
 
-class OpenRouterHTTPError(Exception):
+class ProviderHTTPError(Exception):
     def __init__(self, status_code):
         self.status_code = status_code
 
@@ -209,7 +215,7 @@ async def stream_openrouter(messages):
             if response.status_code != 200:
                 body = await response.aread()
                 LOGGER.error("OpenRouter API error %s: %s", response.status_code, body)
-                raise OpenRouterHTTPError(response.status_code)
+                raise ProviderHTTPError(response.status_code)
 
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
@@ -228,6 +234,50 @@ async def stream_openrouter(messages):
                                 yield content
                     except (json.JSONDecodeError, KeyError, IndexError):
                         pass
+
+
+async def stream_lm_studio(sess_id, system_prompt, text):
+    url = f"http://{LMSTUDIO_HOST}:{LMSTUDIO_PORT}/api/v1/chat"
+    prev_id = LMSTUDIO_RESPONSE_IDS.get(sess_id)
+
+    body = {
+        "model": LMSTUDIO_MODEL,
+        "input": text,
+        "stream": True,
+        "max_output_tokens": 1024,
+        "reasoning": "off",
+        "store": True,
+    }
+    if system_prompt and not prev_id:
+        body["system_prompt"] = system_prompt
+    if prev_id:
+        body["previous_response_id"] = prev_id
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(120.0), follow_redirects=False, trust_env=False
+    ) as client:
+        async with client.stream("POST", url, json=body) as response:
+            if response.status_code != 200:
+                body_text = await response.aread()
+                LOGGER.error(
+                    "LM Studio API error %s: %s", response.status_code, body_text
+                )
+                raise ProviderHTTPError(response.status_code)
+
+            event = None
+            async for line in response.aiter_lines():
+                if line.startswith("event: "):
+                    event = line[7:].strip()
+                elif line.startswith("data: "):
+                    data = json.loads(line[6:].strip())
+                    if event == "message.delta":
+                        content = data.get("content", "")
+                        if content:
+                            yield content
+                    elif event == "chat.end":
+                        rid = data.get("result", {}).get("response_id")
+                        if rid:
+                            LMSTUDIO_RESPONSE_IDS[sess_id] = rid
 
 
 def create_app():
@@ -258,15 +308,15 @@ def create_app():
 
     @asynccontextmanager
     async def lifespan(_):
-        LOGGER.info("Loading model...")
+        LOGGER.info("Loading Whisper model...")
         try:
             engine["ref"] = WhisperModel(
                 WHISPER_MODEL, device=WHISPER_DEVICE, compute_type="default"
             )
             ready.set()
-            LOGGER.info("Model ready")
+            LOGGER.info("Whisper model ready")
         except Exception as e:
-            LOGGER.exception(f"Failed to load model: {e}")
+            LOGGER.exception(f"Failed to load Whisper model: {e}")
         yield
         _executor.shutdown(wait=False)
         ready.clear()
@@ -316,18 +366,28 @@ def create_app():
                             )
                             history.append({"role": "user", "content": text})
                             full_response = ""
+                            provider = "OpenRouter" if USE_OPENROUTER else "LM Studio"
                             try:
-                                async for token in stream_openrouter(messages):
-                                    full_response += token
-                                    await mgr.send(
-                                        sess_id, {"type": "token", "text": token}
-                                    )
-                            except OpenRouterHTTPError as e:
+                                if USE_OPENROUTER:
+                                    async for token in stream_openrouter(messages):
+                                        full_response += token
+                                        await mgr.send(
+                                            sess_id, {"type": "token", "text": token}
+                                        )
+                                else:
+                                    async for token in stream_lm_studio(
+                                        sess_id, SYSTEM_PROMPT, text
+                                    ):
+                                        full_response += token
+                                        await mgr.send(
+                                            sess_id, {"type": "token", "text": token}
+                                        )
+                            except ProviderHTTPError as e:
                                 await mgr.send(
                                     sess_id,
                                     {
                                         "type": "error",
-                                        "message": f"Openrouter returned {e.status_code}",
+                                        "message": f"{provider} returned {e.status_code}",
                                     },
                                 )
                             else:
@@ -367,6 +427,7 @@ def create_app():
         finally:
             sessions.pop(sess_id, None)
             chat_histories.pop(sess_id, None)
+            LMSTUDIO_RESPONSE_IDS.pop(sess_id, None)
             await mgr.disconnect(sess_id)
 
     return app

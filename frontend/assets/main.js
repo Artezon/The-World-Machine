@@ -343,6 +343,8 @@ function tryFinishTypewriter() {
 }
 
 function finishResponse() {
+  if (ui.assistantText.textContent.length === 0)
+    ui.assistantText.appendChild(document.createTextNode("[..."));
   ui.assistantText.appendChild(document.createTextNode("]"));
   setWaiting(false);
   if (isRecording) {
