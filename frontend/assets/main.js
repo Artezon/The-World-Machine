@@ -313,7 +313,6 @@ function queueChars(text) {
       return;
     } else {
       expectEmotion = false;
-      setFace("neutral");
     }
   }
   for (const ch of text) charQueue.push(ch);

@@ -236,7 +236,7 @@ async def stream_openrouter(messages):
                         pass
 
 
-async def stream_lm_studio(sess_id, system_prompt, text):
+async def stream_lm_studio(sess_id, system_prompt, text, reasoning=False):
     url = f"http://{LMSTUDIO_HOST}:{LMSTUDIO_PORT}/api/v1/chat"
     prev_id = LMSTUDIO_RESPONSE_IDS.get(sess_id)
 
@@ -245,9 +245,10 @@ async def stream_lm_studio(sess_id, system_prompt, text):
         "input": text,
         "stream": True,
         "max_output_tokens": 1024,
-        "reasoning": "off",
         "store": True,
     }
+    if not reasoning:
+        body["reasoning"] = "off"
     if system_prompt and not prev_id:
         body["system_prompt"] = system_prompt
     if prev_id:
@@ -258,6 +259,13 @@ async def stream_lm_studio(sess_id, system_prompt, text):
     ) as client:
         async with client.stream("POST", url, json=body) as response:
             if response.status_code != 200:
+                if not reasoning:
+                    async for token in stream_lm_studio(
+                        sess_id, system_prompt, text, reasoning=True
+                    ):
+                        yield token
+                    return
+
                 body_text = await response.aread()
                 LOGGER.error(
                     "LM Studio API error %s: %s", response.status_code, body_text
