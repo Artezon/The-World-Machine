@@ -7,15 +7,11 @@
 
 :root {
     --bg: #000;
-    --surface: #0d0f14;
+    --accent: #8960bf;
     --border: #312040;
+    --box-bg: rgba(19, 11, 24, 0.9);
     --text: #e8eaed;
     --muted: #6a7280;
-    --accent: #8f4ff7;
-    --accent-dim: rgba(79, 195, 247, 0.15);
-    --accent-glow: rgba(79, 195, 247, 0.3);
-    --dialog-bg: rgba(19, 11, 24, 0.9);
-    --msg: #e8eaed;
     --recording: #ef5350;
 }
 
@@ -68,7 +64,7 @@ body {
 }
 
 .user-box {
-    background: var(--dialog-bg);
+    background: var(--box-bg);
     border: 1px solid var(--border);
     border-radius: 7px;
     padding: 10px 14px;
@@ -86,7 +82,7 @@ body {
     font-size: 24px;
     border-radius: 10px;
     padding: 7px 7px 7px 14px;
-    background: var(--dialog-bg);
+    background: var(--box-bg);
     box-sizing: content-box;
     display: flex;
     gap: 8px;
@@ -101,7 +97,6 @@ body {
 .box-text {
     line-height: 1.4;
     white-space: pre-wrap;
-    color: var(--msg);
 }
 
 .assistant-box .box-text {
@@ -130,7 +125,7 @@ body {
 
 .text-input {
     width: 100%;
-    background: var(--dialog-bg);
+    background: var(--box-bg);
     border: 2px solid var(--border);
     border-radius: 7px;
     color: var(--text);
@@ -161,7 +156,7 @@ body {
     height: 48px;
     border-radius: 7px;
     border: 2px solid var(--border);
-    background: var(--dialog-bg);
+    background: var(--box-bg);
     color: var(--muted);
     cursor: pointer;
     display: flex;
@@ -181,7 +176,6 @@ body {
 .action-btn.send-mode:hover {
     border-color: var(--accent);
     color: var(--accent);
-    background: var(--accent-dim);
 }
 
 .action-btn.recording {
@@ -234,7 +228,6 @@ body {
 
 .status-dot.connected {
     background: var(--accent);
-    box-shadow: 0 0 6px var(--accent-glow);
 }
 
 .status-dot.recording {

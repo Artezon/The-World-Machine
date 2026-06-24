@@ -299,15 +299,17 @@ function queueChars(text) {
   if (expectEmotion) {
     if (text[0] === "{" || emotionBuffer.length > 0) {
       emotionBuffer += text;
-      const closeIdx = emotionBuffer.indexOf("}");
-      if (closeIdx !== -1) {
-        setFace(emotionBuffer.substring(1, closeIdx));
-        expectEmotion = false;
-        for (let i = closeIdx + 1; i < emotionBuffer.length; i++)
-          charQueue.push(emotionBuffer[i]);
-        if (!typewriterTimer) startTypewriter();
-        emotionBuffer = "";
-      }
+
+      const m = emotionBuffer.match(/^\{([^}]*)\}(\s*)(\S[\s\S]*)$/);
+      if (!m) return;
+
+      setFace(m[1]);
+      expectEmotion = false;
+
+      for (const ch of m[3]) charQueue.push(ch);
+      if (!typewriterTimer) startTypewriter();
+
+      emotionBuffer = "";
       return;
     } else {
       expectEmotion = false;
