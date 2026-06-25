@@ -323,10 +323,6 @@ def create_app():
                         (m for m in models if m.get("key") == LMSTUDIO_MODEL), None
                     )
                     if selected and selected.get("loaded_instances"):
-                        LOGGER.info(
-                            "LM Studio model '%s' is already loaded",
-                            LMSTUDIO_MODEL,
-                        )
                         return
 
                 LOGGER.info("Preloading LM Studio model '%s'...", LMSTUDIO_MODEL)
@@ -356,9 +352,6 @@ def create_app():
             LOGGER.info("Whisper model ready")
         except Exception as e:
             LOGGER.exception(f"Failed to load Whisper model: {e}")
-
-        if not USE_OPENROUTER:
-            asyncio.create_task(_preload_lm_studio_model())
 
         yield
         _executor.shutdown(wait=False)
@@ -403,6 +396,8 @@ def create_app():
     async def ws(websocket: WebSocket):
         sess_id = uuid.uuid4().hex
         await mgr.connect(sess_id, websocket)
+        if not USE_OPENROUTER:
+            asyncio.create_task(_preload_lm_studio_model())
         session = None
         chat_histories[sess_id] = []
         try:
@@ -419,6 +414,15 @@ def create_app():
                         elif data.get("type") == "chat":
                             text = data.get("text", "").strip()
                             if not text:
+                                continue
+                            if len(text) > 4096:
+                                await mgr.send(
+                                    sess_id,
+                                    {
+                                        "type": "error",
+                                        "message": "Sorry, we can't deliver such a long message. Please try sending something shorter",
+                                    },
+                                )
                                 continue
                             history = chat_histories.get(sess_id, [])
                             messages = (
@@ -465,7 +469,7 @@ def create_app():
                                 history.append(
                                     {"role": "assistant", "content": full_response}
                                 )
-                                if len(history) > 50:
+                                if len(history) > 100:
                                     history[:2] = []
                                 chat_histories[sess_id] = history
                                 await mgr.send(sess_id, {"type": "done"})

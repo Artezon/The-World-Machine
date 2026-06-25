@@ -106,7 +106,7 @@ function setConnected(connected) {
 function setWaiting(waiting) {
   isWaiting = waiting;
   if (waiting) {
-    setStatus("processing", "The World Machine is thinking...");
+    setStatus("processing", "Delivering your message to The World Machine...");
     clearTimeout(thinkingTimeout);
     thinkingTimeout = setTimeout(() => {
       if (isWaiting) {
@@ -245,6 +245,7 @@ function connect() {
               ui.assistantText.textContent = "[";
               expectEmotion = true;
               emotionBuffer = "";
+              setStatus("processing", "The World Machine is thinking...");
             }
             queueChars(msg.text);
           }
