@@ -2,8 +2,10 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import logging.config
 import math
 import os
+import sys
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -46,8 +48,7 @@ VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.5"))
 USE_OPENROUTER = os.getenv("USE_OPENROUTER", "1") == "1"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
-LMSTUDIO_HOST = os.getenv("LMSTUDIO_HOST", "localhost")
-LMSTUDIO_PORT = int(os.getenv("LMSTUDIO_PORT", "1234"))
+LMSTUDIO_URL = os.getenv("LMSTUDIO_URL", "http://localhost:1234").rstrip("/")
 LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "")
 
 SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "system_prompt.txt"
@@ -190,10 +191,6 @@ class ProviderError(Exception):
 
 
 async def stream_openrouter(messages):
-    if not OPENROUTER_API_KEY:
-        yield "The OpenRouter API key is not configured. Please set OPENROUTER_API_KEY in the environment."
-        return
-
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -237,7 +234,7 @@ async def stream_openrouter(messages):
 
 
 async def stream_lm_studio(sess_id, system_prompt, text, reasoning=False):
-    url = f"http://{LMSTUDIO_HOST}:{LMSTUDIO_PORT}/api/v1/chat"
+    url = f"{LMSTUDIO_URL}/api/v1/chat"
     prev_id = LMSTUDIO_RESPONSE_IDS.get(sess_id)
 
     body = {
@@ -255,7 +252,7 @@ async def stream_lm_studio(sess_id, system_prompt, text, reasoning=False):
         body["previous_response_id"] = prev_id
 
     async with httpx.AsyncClient(
-        timeout=httpx.Timeout(120.0), follow_redirects=False, trust_env=False
+        timeout=httpx.Timeout(120.0), trust_env=False
     ) as client:
         async with client.stream("POST", url, json=body) as response:
             if response.status_code != 200:
@@ -314,6 +311,40 @@ def create_app():
             LOGGER.exception("transcribe failed")
             return "", ""
 
+    async def _preload_lm_studio_model():
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(60.0), trust_env=False
+            ) as client:
+                r = await client.get(f"{LMSTUDIO_URL}/api/v1/models/")
+                if r.status_code == 200:
+                    models = r.json().get("models", [])
+                    selected = next(
+                        (m for m in models if m.get("key") == LMSTUDIO_MODEL), None
+                    )
+                    if selected and selected.get("loaded_instances"):
+                        LOGGER.info(
+                            "LM Studio model '%s' is already loaded",
+                            LMSTUDIO_MODEL,
+                        )
+                        return
+
+                LOGGER.info("Preloading LM Studio model '%s'...", LMSTUDIO_MODEL)
+                r = await client.post(
+                    f"{LMSTUDIO_URL}/api/v1/models/load",
+                    json={"model": LMSTUDIO_MODEL},
+                )
+                if r.status_code == 200:
+                    LOGGER.info("LM Studio model '%s' loaded", LMSTUDIO_MODEL)
+                else:
+                    LOGGER.warning(
+                        "LM Studio model load returned %s: %s",
+                        r.status_code,
+                        r.text,
+                    )
+        except Exception as e:
+            LOGGER.warning("Failed to check LM Studio model: %s", e)
+
     @asynccontextmanager
     async def lifespan(_):
         LOGGER.info("Loading Whisper model...")
@@ -325,6 +356,10 @@ def create_app():
             LOGGER.info("Whisper model ready")
         except Exception as e:
             LOGGER.exception(f"Failed to load Whisper model: {e}")
+
+        if not USE_OPENROUTER:
+            asyncio.create_task(_preload_lm_studio_model())
+
         yield
         _executor.shutdown(wait=False)
         ready.clear()
@@ -337,9 +372,32 @@ def create_app():
     async def index():
         return HTMLResponse(FRONTEND_HTML.read_text("utf-8"))
 
+    async def _check_llm_health() -> bool:
+        try:
+            if USE_OPENROUTER:
+                if not OPENROUTER_API_KEY:
+                    return False
+                async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+                    r = await client.get(
+                        "https://openrouter.ai/api/v1/auth/key",
+                        headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
+                    )
+            else:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(5.0), trust_env=False
+                ) as client:
+                    r = await client.get(LMSTUDIO_URL)
+            return r.status_code == 200
+        except Exception:
+            return False
+
     @app.get("/health")
     async def health():
-        return {"ok": ready.is_set()}
+        return {
+            "main": True,
+            "stt": ready.is_set(),
+            "llm": await _check_llm_health(),
+        }
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
@@ -356,12 +414,8 @@ def create_app():
                         if "language" in data:
                             session = Session(sess_id, data["language"])
                             sessions[sess_id] = session
-                            await mgr.send(
-                                sess_id,
-                                {
-                                    "type": "ready" if ready.is_set() else "status",
-                                },
-                            )
+                            if ready.is_set():
+                                await mgr.send(sess_id, {"type": "ready"})
                         elif data.get("type") == "chat":
                             text = data.get("text", "").strip()
                             if not text:
@@ -428,10 +482,9 @@ def create_app():
                                 await mgr.send(
                                     sess_id,
                                     {
-                                        "type": "final",
+                                        "type": "stt",
                                         "text": text,
-                                        "language": lang or "auto",
-                                        "sessionId": sess_id,
+                                        "lang": lang or "auto",
                                     },
                                 )
                     except AudioPacketError as e:
@@ -452,6 +505,15 @@ def create_app():
 
 if __name__ == "__main__":
     LOGGING_CONFIG["root"] = {"level": "INFO", "handlers": ["default"]}
+    logging.config.dictConfig(LOGGING_CONFIG)
+
+    if USE_OPENROUTER and not OPENROUTER_API_KEY:
+        LOGGER.error("OPENROUTER_API_KEY is not set, exiting")
+        sys.exit(1)
+    if not USE_OPENROUTER and not LMSTUDIO_MODEL:
+        LOGGER.error("LMSTUDIO_MODEL is not set, exiting")
+        sys.exit(1)
+
     uvicorn.run(
         create_app(), host=HOST, port=PORT, log_level="info", log_config=LOGGING_CONFIG
     )

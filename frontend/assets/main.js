@@ -231,10 +231,7 @@ function connect() {
             queueChars(welcome);
           }, 800);
           break;
-        case "status":
-          ui.statusText.textContent = msg.text || "Connected";
-          break;
-        case "final":
+        case "stt":
           ui.textInput.value = msg.text;
           updateActionButton();
           if (!isWaiting) {
