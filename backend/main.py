@@ -184,7 +184,7 @@ def process_packet(packet, max_bytes=524288):
     return resample_int16(s, sr, SERVER_SAMPLE_RATE)
 
 
-class ProviderHTTPError(Exception):
+class ProviderError(Exception):
     def __init__(self, status_code):
         self.status_code = status_code
 
@@ -215,7 +215,7 @@ async def stream_openrouter(messages):
             if response.status_code != 200:
                 body = await response.aread()
                 LOGGER.error("OpenRouter API error %s: %s", response.status_code, body)
-                raise ProviderHTTPError(response.status_code)
+                raise ProviderError(response.status_code)
 
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
@@ -270,7 +270,7 @@ async def stream_lm_studio(sess_id, system_prompt, text, reasoning=False):
                 LOGGER.error(
                     "LM Studio API error %s: %s", response.status_code, body_text
                 )
-                raise ProviderHTTPError(response.status_code)
+                raise ProviderError(response.status_code)
 
             event = None
             async for line in response.aiter_lines():
@@ -390,12 +390,21 @@ def create_app():
                                         await mgr.send(
                                             sess_id, {"type": "token", "text": token}
                                         )
-                            except ProviderHTTPError as e:
+                            except ProviderError as e:
                                 await mgr.send(
                                     sess_id,
                                     {
                                         "type": "error",
                                         "message": f"{provider} returned {e.status_code}",
+                                    },
+                                )
+                            except httpx.HTTPError as e:
+                                LOGGER.error("Connection to %s failed: %s", provider, e)
+                                await mgr.send(
+                                    sess_id,
+                                    {
+                                        "type": "error",
+                                        "message": "Could not deliver your message to The World Machine. Please try again later",
                                     },
                                 )
                             else:
