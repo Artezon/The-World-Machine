@@ -45,6 +45,7 @@ WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cuda")
 SILENCE_MS = int(os.getenv("SILENCE_MS", "500"))
 VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.5"))
+LANG_CONFIDENCE_THRESHOLD = float(os.getenv("LANG_CONFIDENCE_THRESHOLD", "0.7"))
 USE_OPENROUTER = os.getenv("USE_OPENROUTER", "1") == "1"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
@@ -303,9 +304,12 @@ def create_app():
             def run():
                 segments, info = e.transcribe(audio, language=lang or None)
                 text = " ".join(seg.text for seg in segments)
-                return text.strip(), info.language
+                return text.strip(), info.language, info.language_probability
 
-            text, detected = await loop.run_in_executor(_executor, run)
+            text, detected, prob = await loop.run_in_executor(_executor, run)
+            if prob < LANG_CONFIDENCE_THRESHOLD:
+                LOGGER.info("Ignoring audio (low language confidence)")
+                return "", ""
             return text, detected or lang or ""
         except Exception:
             LOGGER.exception("transcribe failed")
